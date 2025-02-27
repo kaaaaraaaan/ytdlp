@@ -1,28 +1,61 @@
-[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2Fvercel%2Fexamples%2Ftree%2Fmain%2Fpython%2Fflask3&demo-title=Flask%203%20%2B%20Vercel&demo-description=Use%20Flask%203%20on%20Vercel%20with%20Serverless%20Functions%20using%20the%20Python%20Runtime.&demo-url=https%3A%2F%2Fflask3-python-template.vercel.app%2F&demo-image=https://assets.vercel.com/image/upload/v1669994156/random/flask.png)
+# YouTube Downloader API
 
-# Flask + Vercel
+This application provides a simple API for searching YouTube videos and downloading them as MP3 files. It uses Flask, yt-dlp, and FFmpeg to handle the search and download functionality.
 
-This example shows how to use Flask 3 on Vercel with Serverless Functions using the [Python Runtime](https://vercel.com/docs/concepts/functions/serverless-functions/runtimes/python).
+## Features
 
-## Demo
+- Search for YouTube videos by song name and artist
+- Download YouTube videos as MP3 files
+- Caching to improve performance and reduce API calls
+- Rate limiting to prevent abuse
+- Error handling for common issues
 
-https://flask-python-template.vercel.app/
+## API Endpoints
 
-## How it Works
+### Search Endpoint
 
-This example uses the Web Server Gateway Interface (WSGI) with Flask to enable handling requests on Vercel with Serverless Functions.
+```
+GET /search?song=SONG_NAME&artist=ARTIST_NAME
+```
+
+Returns information about the most relevant YouTube video for the given song and artist.
+
+### Download Endpoint
+
+```
+GET /download?url=YOUTUBE_URL
+```
+
+Downloads the YouTube video as an MP3 file and returns it as an attachment.
+
+For JSON response instead of file download:
+
+```
+GET /download?url=YOUTUBE_URL&json=true
+```
+
+## Dependencies
+
+- Flask 3.0.0
+- flask-cors 4.0.0
+- yt-dlp 2025.02.19
+- ffmpeg-python 0.2.0
+- imageio-ffmpeg 0.6.0
 
 ## Running Locally
 
 ```bash
-npm i -g vercel
-vercel dev
+# Install dependencies
+pip install -r requirements.txt
+
+# Run the server
+python api/index.py
 ```
 
-Your Flask application is now available at `http://localhost:3000`.
+Your application is now available at `http://localhost:3001`.
 
-## One-Click Deploy
+## Deployment
 
-Deploy the example using [Vercel](https://vercel.com?utm_source=github&utm_medium=readme&utm_campaign=vercel-examples):
+This application is configured for deployment on Vercel with Serverless Functions.
 
-[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2Fvercel%2Fexamples%2Ftree%2Fmain%2Fpython%2Fflask3&demo-title=Flask%203%20%2B%20Vercel&demo-description=Use%20Flask%203%20on%20Vercel%20with%20Serverless%20Functions%20using%20the%20Python%20Runtime.&demo-url=https%3A%2F%2Fflask3-python-template.vercel.app%2F&demo-image=https://assets.vercel.com/image/upload/v1669994156/random/flask.png)
+[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2Fkaaaaraaaan%2Fytdlp)
