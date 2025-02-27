@@ -11,6 +11,8 @@ import asyncio
 from threading import Lock
 import uuid
 import imageio_ffmpeg
+import subprocess
+import shutil
 
 app = Flask(__name__)
 CORS(app)
@@ -18,6 +20,36 @@ CORS(app)
 # Get FFmpeg executable path
 FFMPEG_PATH = imageio_ffmpeg.get_ffmpeg_exe()
 print(f"Using FFmpeg from: {FFMPEG_PATH}")
+
+# Check if FFmpeg is actually available
+def is_ffmpeg_available():
+    """Check if FFmpeg is available on the system"""
+    try:
+        # First try the path from imageio_ffmpeg
+        if os.path.exists(FFMPEG_PATH):
+            return True
+            
+        # Then try to find ffmpeg in PATH
+        ffmpeg_path = shutil.which('ffmpeg')
+        if ffmpeg_path:
+            global FFMPEG_PATH
+            FFMPEG_PATH = ffmpeg_path
+            return True
+            
+        # Try running ffmpeg command
+        result = subprocess.run(['ffmpeg', '-version'], 
+                               stdout=subprocess.PIPE, 
+                               stderr=subprocess.PIPE, 
+                               text=True, 
+                               check=False)
+        return result.returncode == 0
+    except Exception as e:
+        print(f"FFmpeg check error: {str(e)}")
+        return False
+
+# Check FFmpeg availability at startup
+FFMPEG_AVAILABLE = is_ffmpeg_available()
+print(f"FFmpeg available: {FFMPEG_AVAILABLE}")
 
 # Cache and rate limiting configuration
 CACHE_DURATION = 3600  # 1 hour in seconds
@@ -109,30 +141,77 @@ def download_youtube_to_mp3(youtube_url):
     unique_id = str(uuid.uuid4())
     output_path = os.path.join(download_dir, f"{unique_id}.%(ext)s")
     
-    ydl_opts = {
-        'format': 'bestaudio/best',
-        'postprocessors': [{
-            'key': 'FFmpegExtractAudio',
-            'preferredcodec': 'mp3',
-            'preferredquality': '192',
-        }],
-        'outtmpl': output_path,
-        'quiet': False,
-        'no_warnings': False,
-        # Additional options to bypass restrictions
-        'nocheckcertificate': True,
-        'ignoreerrors': False,
-        'logtostderr': False,
-        'geo_bypass': True,
-        'extractor_retries': 3,
-        'socket_timeout': 30,
-        # Add user-agent to avoid some restrictions
-        'http_headers': {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-        },
-        # Specify FFmpeg executable path
-        'ffmpeg_location': FFMPEG_PATH
-    }
+    # Check if we're running on Vercel (by checking for specific environment variables)
+    is_vercel = 'VERCEL' in os.environ or not FFMPEG_AVAILABLE
+    
+    if is_vercel:
+        # Simplified options for Vercel environment (no FFmpeg audio extraction)
+        ydl_opts = {
+            # Request only audio formats to minimize download size
+            'format': 'bestaudio[ext=m4a]/bestaudio[ext=mp3]/bestaudio',
+            'outtmpl': output_path,
+            'quiet': False,
+            'no_warnings': False,
+            # Additional options to bypass restrictions
+            'nocheckcertificate': True,
+            'ignoreerrors': False,
+            'logtostderr': False,
+            'geo_bypass': True,
+            'extractor_retries': 5,
+            'socket_timeout': 60,
+            # Enhanced options for bypassing restrictions
+            'skip_download_archive': True,
+            'no_cache_dir': True,
+            'rm_cache_dir': True,
+            'cookiefile': None,  # Don't use cookies
+            'age_limit': 21,  # Set high age limit to bypass some restrictions
+            'referer': 'https://www.youtube.com/',  # Set referer to YouTube
+            # Add user-agent to avoid some restrictions - use a more recent Chrome version
+            'http_headers': {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+                'Accept-Language': 'en-US,en;q=0.5',
+                'Referer': 'https://www.youtube.com/',
+                'Origin': 'https://www.youtube.com',
+            }
+        }
+    else:
+        # Full options with FFmpeg audio extraction for local environment
+        ydl_opts = {
+            'format': 'bestaudio/best',
+            'postprocessors': [{
+                'key': 'FFmpegExtractAudio',
+                'preferredcodec': 'mp3',
+                'preferredquality': '192',
+            }],
+            'outtmpl': output_path,
+            'quiet': False,
+            'no_warnings': False,
+            # Additional options to bypass restrictions
+            'nocheckcertificate': True,
+            'ignoreerrors': False,
+            'logtostderr': False,
+            'geo_bypass': True,
+            'extractor_retries': 5,
+            'socket_timeout': 60,
+            # Enhanced options for bypassing restrictions
+            'skip_download_archive': True,
+            'no_cache_dir': True,
+            'rm_cache_dir': True,
+            'cookiefile': None,  # Don't use cookies
+            'age_limit': 21,  # Set high age limit to bypass some restrictions
+            'referer': 'https://www.youtube.com/',  # Set referer to YouTube
+            # Add user-agent to avoid some restrictions - use a more recent Chrome version
+            'http_headers': {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+                'Accept-Language': 'en-US,en;q=0.5',
+                'Referer': 'https://www.youtube.com/',
+                'Origin': 'https://www.youtube.com',
+            },
+            # Specify FFmpeg executable path
+            'ffmpeg_location': FFMPEG_PATH
+        }
     
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -141,14 +220,19 @@ def download_youtube_to_mp3(youtube_url):
             
             if info:
                 # Get the actual filename after download and processing
-                mp3_filename = os.path.join(download_dir, f"{unique_id}.mp3")
+                if is_vercel:
+                    # If we're on Vercel, the filename will be in the format {unique_id}.m4a or {unique_id}.mp3
+                    filename = os.path.join(download_dir, f"{unique_id}.{info['ext']}")
+                else:
+                    filename = os.path.join(download_dir, f"{unique_id}.mp3")
+                
                 title = info.get('title', 'downloaded_audio')
                 
                 # Check if the file was actually created
-                if os.path.exists(mp3_filename):
+                if os.path.exists(filename):
                     return {
                         'success': True,
-                        'file_path': mp3_filename,
+                        'file_path': filename,
                         'title': title,
                         'info': {
                             'id': info.get('id', ''),
@@ -194,6 +278,9 @@ def download_youtube_to_mp3(youtube_url):
 
 @app.route('/download', methods=['GET'])
 def download():
+    if not FFMPEG_AVAILABLE and 'VERCEL' not in os.environ:
+        return jsonify({'error': 'FFmpeg is not available on the system'}), 500
+    
     youtube_url = request.args.get('url', '')
     json_response = request.args.get('json', 'false').lower() == 'true'
     
@@ -230,8 +317,8 @@ def download():
         response = send_file(
             result['file_path'],
             as_attachment=True,
-            download_name=f"{safe_title}.mp3",
-            mimetype='audio/mpeg'
+            download_name=f"{safe_title}{os.path.splitext(filename)[1]}",
+            mimetype='audio/mpeg' if os.path.splitext(filename)[1] == '.mp3' else 'audio/x-m4a'
         )
         
         # Add a callback to remove the file after sending
