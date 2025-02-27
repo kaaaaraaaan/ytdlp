@@ -3,7 +3,7 @@ import json
 import urllib.parse
 import os
 import tempfile
-from flask import Flask, request, jsonify, send_file, Response
+from flask import Flask, request, jsonify, send_file, Response, redirect
 from flask_cors import CORS
 from functools import lru_cache
 import time
@@ -13,6 +13,9 @@ import uuid
 import imageio_ffmpeg
 import subprocess
 import shutil
+import base64
+import random
+import string
 
 app = Flask(__name__)
 CORS(app)
@@ -20,6 +23,35 @@ CORS(app)
 # Get FFmpeg executable path
 FFMPEG_PATH = imageio_ffmpeg.get_ffmpeg_exe()
 print(f"Using FFmpeg from: {FFMPEG_PATH}")
+
+# Check if running on Vercel
+IS_VERCEL = 'VERCEL' in os.environ
+print(f"Running on Vercel: {IS_VERCEL}")
+
+# Generate a fake cookie for YouTube
+def generate_fake_cookies():
+    # These are common YouTube cookie names
+    cookie_names = ['VISITOR_INFO1_LIVE', 'YSC', 'PREF', 'LOGIN_INFO', 'APISID', 'HSID', 'SAPISID', 'SID', 'SSID']
+    cookies = []
+    
+    for name in cookie_names:
+        # Generate random value
+        value = ''.join(random.choices(string.ascii_letters + string.digits, k=20))
+        cookies.append(f"{name}={value}")
+    
+    return "; ".join(cookies)
+
+# Create a temporary cookie file for YouTube
+def create_cookie_file():
+    cookie_content = f"""# Netscape HTTP Cookie File
+.youtube.com\tTRUE\t/\tFALSE\t2147483647\tCONSENT\tYES+cb.20210328-17-p0.en+FX+{random.randint(100, 999)}
+.youtube.com\tTRUE\t/\tFALSE\t2147483647\t{generate_fake_cookies()}
+www.youtube.com\tTRUE\t/\tFALSE\t2147483647\t{generate_fake_cookies()}
+"""
+    cookie_file = os.path.join(tempfile.gettempdir(), f"youtube_cookies_{uuid.uuid4()}.txt")
+    with open(cookie_file, 'w') as f:
+        f.write(cookie_content)
+    return cookie_file
 
 # Check if FFmpeg is actually available
 def is_ffmpeg_available():
@@ -141,39 +173,57 @@ def download_youtube_to_mp3(youtube_url):
     unique_id = str(uuid.uuid4())
     output_path = os.path.join(download_dir, f"{unique_id}.%(ext)s")
     
-    # Check if we're running on Vercel (by checking for specific environment variables)
-    is_vercel = 'VERCEL' in os.environ or not FFMPEG_AVAILABLE
+    # Check if we're running on Vercel
+    is_vercel = IS_VERCEL
     
     if is_vercel:
-        # Simplified options for Vercel environment (no FFmpeg audio extraction)
+        # Create a cookie file for YouTube
+        cookie_file = create_cookie_file()
+        print(f"Created cookie file at: {cookie_file}")
+        
+        # Aggressive options for Vercel environment
         ydl_opts = {
             # Request only audio formats to minimize download size
-            'format': 'bestaudio[ext=m4a]/bestaudio[ext=mp3]/bestaudio',
+            'format': 'bestaudio[ext=m4a]/bestaudio[ext=mp3]/bestaudio/best',
             'outtmpl': output_path,
             'quiet': False,
+            'verbose': True,  # Enable verbose output for debugging
             'no_warnings': False,
             # Additional options to bypass restrictions
             'nocheckcertificate': True,
             'ignoreerrors': False,
-            'logtostderr': False,
+            'logtostderr': True,
             'geo_bypass': True,
-            'extractor_retries': 5,
-            'socket_timeout': 60,
+            'geo_bypass_country': 'US',  # Try US-based IP
+            'extractor_retries': 10,
+            'socket_timeout': 120,
             # Enhanced options for bypassing restrictions
             'skip_download_archive': True,
             'no_cache_dir': True,
             'rm_cache_dir': True,
-            'cookiefile': None,  # Don't use cookies
-            'age_limit': 21,  # Set high age limit to bypass some restrictions
-            'referer': 'https://www.youtube.com/',  # Set referer to YouTube
+            'cookiefile': cookie_file,  # Use generated cookies
+            'age_limit': 30,  # Set high age limit to bypass some restrictions
+            'referer': 'https://www.youtube.com/',
+            'sleep_interval': 1,  # Add delay between requests
+            'max_sleep_interval': 5,
+            'external_downloader_args': ['-timeout', '60'],
             # Add user-agent to avoid some restrictions - use a more recent Chrome version
             'http_headers': {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
                 'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
                 'Accept-Language': 'en-US,en;q=0.5',
                 'Referer': 'https://www.youtube.com/',
                 'Origin': 'https://www.youtube.com',
-            }
+                'Connection': 'keep-alive',
+                'Upgrade-Insecure-Requests': '1',
+                'Sec-Fetch-Dest': 'document',
+                'Sec-Fetch-Mode': 'navigate',
+                'Sec-Fetch-Site': 'same-origin',
+                'Sec-Fetch-User': '?1',
+                'DNT': '1',
+            },
+            # Try to use a proxy if available (Vercel doesn't support this, but we'll try)
+            'proxy': None,
         }
     else:
         # Full options with FFmpeg audio extraction for local environment
@@ -262,6 +312,58 @@ def download_youtube_to_mp3(youtube_url):
         error_message = str(e)
         print(f"Error during YouTube download: {error_message}")
         
+        # If we're on Vercel and the standard download failed, try to extract direct URLs
+        if is_vercel:
+            try:
+                print("Attempting fallback method: extracting direct audio URL...")
+                # Configure yt-dlp to only extract info, not download
+                extract_opts = {
+                    'format': 'bestaudio[ext=m4a]/bestaudio[ext=mp3]/bestaudio',
+                    'quiet': False,
+                    'no_warnings': False,
+                    'nocheckcertificate': True,
+                    'geo_bypass': True,
+                    'cookiefile': create_cookie_file(),  # Use generated cookies
+                    'skip_download': True,  # Don't download, just extract info
+                    'http_headers': ydl_opts['http_headers'],
+                }
+                
+                with yt_dlp.YoutubeDL(extract_opts) as ydl:
+                    info = ydl.extract_info(youtube_url, download=False)
+                    
+                    if info and 'formats' in info:
+                        # Find the best audio format
+                        audio_formats = [f for f in info['formats'] 
+                                        if f.get('acodec') != 'none' and f.get('vcodec') == 'none']
+                        
+                        if not audio_formats:
+                            # If no audio-only format, take any format with audio
+                            audio_formats = [f for f in info['formats'] if f.get('acodec') != 'none']
+                        
+                        if audio_formats:
+                            # Sort by quality (typically bitrate)
+                            audio_formats.sort(key=lambda x: x.get('abr', 0), reverse=True)
+                            best_audio = audio_formats[0]
+                            
+                            return {
+                                'success': True,
+                                'direct_url': True,  # Flag that this is a direct URL, not a file
+                                'url': best_audio.get('url'),
+                                'title': info.get('title', 'audio'),
+                                'info': {
+                                    'id': info.get('id', ''),
+                                    'title': info.get('title', ''),
+                                    'duration': info.get('duration', 0),
+                                    'uploader': info.get('uploader', ''),
+                                    'format': best_audio.get('format', ''),
+                                    'ext': best_audio.get('ext', 'mp3')
+                                }
+                            }
+                
+                print("Fallback method failed: No suitable audio formats found")
+            except Exception as fallback_error:
+                print(f"Fallback method failed: {str(fallback_error)}")
+        
         # Provide more specific error messages for common issues
         if "Sign in to confirm" in error_message:
             error_message = "YouTube requires authentication for this video. Try another video or use a different method."
@@ -278,7 +380,7 @@ def download_youtube_to_mp3(youtube_url):
 
 @app.route('/download', methods=['GET'])
 def download():
-    if not FFMPEG_AVAILABLE and 'VERCEL' not in os.environ:
+    if not FFMPEG_AVAILABLE and not IS_VERCEL:
         return jsonify({'error': 'FFmpeg is not available on the system'}), 500
     
     youtube_url = request.args.get('url', '')
@@ -293,6 +395,20 @@ def download():
     
     # Download the video as MP3
     result = download_youtube_to_mp3(youtube_url)
+    
+    # If this is a direct URL result from the fallback method
+    if result.get('success') and result.get('direct_url'):
+        if json_response:
+            return jsonify({
+                'success': True,
+                'direct_url': True,
+                'url': result['url'],
+                'title': result['title'],
+                'info': result.get('info', {})
+            })
+        else:
+            # Redirect to the direct URL
+            return redirect(result['url'])
     
     # If json response is requested or download failed, return JSON
     if json_response or not result['success']:
