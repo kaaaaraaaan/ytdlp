@@ -24,6 +24,7 @@ print(f"Using FFmpeg from: {FFMPEG_PATH}")
 # Check if FFmpeg is actually available
 def is_ffmpeg_available():
     """Check if FFmpeg is available on the system"""
+    global FFMPEG_PATH
     try:
         # First try the path from imageio_ffmpeg
         if os.path.exists(FFMPEG_PATH):
@@ -32,7 +33,6 @@ def is_ffmpeg_available():
         # Then try to find ffmpeg in PATH
         ffmpeg_path = shutil.which('ffmpeg')
         if ffmpeg_path:
-            global FFMPEG_PATH
             FFMPEG_PATH = ffmpeg_path
             return True
             
