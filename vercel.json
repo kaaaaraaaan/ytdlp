@@ -1,18 +1,5 @@
 {
   "rewrites": [
     { "source": "/(.*)", "destination": "/api/index" }
-  ],
-  "builds": [
-    {
-      "src": "api/index.py",
-      "use": "@vercel/python"
-    }
-  ],
-  "buildCommand": "chmod +x api/vercel-build.sh && ./api/vercel-build.sh",
-  "functions": {
-    "api/index.py": {
-      "memory": 1024,
-      "maxDuration": 60
-    }
-  }
+  ]
 }
