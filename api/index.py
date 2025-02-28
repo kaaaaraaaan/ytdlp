@@ -11,13 +11,36 @@ import asyncio
 from threading import Lock
 import uuid
 import imageio_ffmpeg
+import sys
 
 app = Flask(__name__)
 CORS(app)
 
-# Get FFmpeg executable path
-FFMPEG_PATH = imageio_ffmpeg.get_ffmpeg_exe()
+# Get FFmpeg executable path - handle Vercel environment
+def get_ffmpeg_path():
+    # Check if we're on Vercel
+    if os.environ.get('VERCEL'):
+        # Use the FFmpeg binary we installed in vercel-build.sh
+        base_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        ffmpeg_path = os.path.join(base_path, '.vercel', 'bin', 'ffmpeg')
+        if os.path.exists(ffmpeg_path):
+            print(f"Using Vercel-installed FFmpeg: {ffmpeg_path}")
+            return ffmpeg_path
+    
+    # Fallback to imageio_ffmpeg for local development
+    try:
+        ffmpeg_path = imageio_ffmpeg.get_ffmpeg_exe()
+        print(f"Using imageio_ffmpeg: {ffmpeg_path}")
+        return ffmpeg_path
+    except Exception as e:
+        print(f"Error getting FFmpeg path: {str(e)}")
+        # Last resort - try system FFmpeg
+        return 'ffmpeg'
+
+FFMPEG_PATH = get_ffmpeg_path()
 print(f"Using FFmpeg from: {FFMPEG_PATH}")
+print(f"Python version: {sys.version}")
+print(f"Environment: {'Vercel' if os.environ.get('VERCEL') else 'Local'}")
 
 # Cache and rate limiting configuration
 CACHE_DURATION = 3600  # 1 hour in seconds
@@ -107,7 +130,17 @@ def download_youtube_to_mp3(youtube_url):
     """
     # Generate a unique filename using UUID
     unique_id = str(uuid.uuid4())
-    output_path = os.path.join(download_dir, f"{unique_id}.%(ext)s")
+    
+    # Ensure we have a writable directory in Vercel
+    if os.environ.get('VERCEL'):
+        # In Vercel, use /tmp which is writable
+        temp_dir = '/tmp'
+        if not os.path.exists(temp_dir):
+            os.makedirs(temp_dir, exist_ok=True)
+    else:
+        temp_dir = download_dir
+    
+    output_path = os.path.join(temp_dir, f"{unique_id}.%(ext)s")
     
     ydl_opts = {
         'format': 'bestaudio/best',
@@ -131,7 +164,13 @@ def download_youtube_to_mp3(youtube_url):
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
         },
         # Specify FFmpeg executable path
-        'ffmpeg_location': FFMPEG_PATH
+        'ffmpeg_location': FFMPEG_PATH,
+        # Add cookies to bypass age restrictions
+        'cookiefile': None,  # No cookies file by default
+        # Add additional YouTube-specific options
+        'age_limit': 0,  # No age limit
+        'skip_download': False,
+        'youtube_include_dash_manifest': False
     }
     
     try:
@@ -141,7 +180,7 @@ def download_youtube_to_mp3(youtube_url):
             
             if info:
                 # Get the actual filename after download and processing
-                mp3_filename = os.path.join(download_dir, f"{unique_id}.mp3")
+                mp3_filename = os.path.join(temp_dir, f"{unique_id}.mp3")
                 title = info.get('title', 'downloaded_audio')
                 
                 # Check if the file was actually created
@@ -184,7 +223,9 @@ def download_youtube_to_mp3(youtube_url):
         elif "HTTP Error 403" in error_message:
             error_message = "Access forbidden by YouTube. This might be due to region restrictions or YouTube's anti-bot measures."
         elif "ffmpeg" in error_message.lower():
-            error_message = "FFmpeg is required but not found. Please install FFmpeg and add it to your PATH."
+            error_message = f"FFmpeg issue: {error_message}. Path: {FFMPEG_PATH}, Exists: {os.path.exists(FFMPEG_PATH)}"
+        elif "This video is available for Premium users only" in error_message:
+            error_message = "This video is only available for YouTube Premium subscribers."
         
         return {
             'success': False,
@@ -262,7 +303,17 @@ def download_youtube_to_mp4(youtube_url):
     """
     # Generate a unique filename using UUID
     unique_id = str(uuid.uuid4())
-    output_path = os.path.join(download_dir, f"{unique_id}.%(ext)s")
+    
+    # Ensure we have a writable directory in Vercel
+    if os.environ.get('VERCEL'):
+        # In Vercel, use /tmp which is writable
+        temp_dir = '/tmp'
+        if not os.path.exists(temp_dir):
+            os.makedirs(temp_dir, exist_ok=True)
+    else:
+        temp_dir = download_dir
+    
+    output_path = os.path.join(temp_dir, f"{unique_id}.%(ext)s")
     
     ydl_opts = {
         'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
@@ -282,7 +333,13 @@ def download_youtube_to_mp4(youtube_url):
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
         },
         # Specify FFmpeg executable path
-        'ffmpeg_location': FFMPEG_PATH
+        'ffmpeg_location': FFMPEG_PATH,
+        # Add cookies to bypass age restrictions
+        'cookiefile': None,  # No cookies file by default
+        # Add additional YouTube-specific options
+        'age_limit': 0,  # No age limit
+        'skip_download': False,
+        'youtube_include_dash_manifest': False
     }
     
     try:
@@ -295,7 +352,7 @@ def download_youtube_to_mp4(youtube_url):
                 # The extension might be mp4 or another format that was merged to mp4
                 mp4_filename = None
                 for ext in ['mp4', 'mkv', 'webm']:
-                    potential_file = os.path.join(download_dir, f"{unique_id}.{ext}")
+                    potential_file = os.path.join(temp_dir, f"{unique_id}.{ext}")
                     if os.path.exists(potential_file):
                         mp4_filename = potential_file
                         break
@@ -344,7 +401,9 @@ def download_youtube_to_mp4(youtube_url):
         elif "HTTP Error 403" in error_message:
             error_message = "Access forbidden by YouTube. This might be due to region restrictions or YouTube's anti-bot measures."
         elif "ffmpeg" in error_message.lower():
-            error_message = "FFmpeg is required but not found. Please install FFmpeg and add it to your PATH."
+            error_message = f"FFmpeg issue: {error_message}. Path: {FFMPEG_PATH}, Exists: {os.path.exists(FFMPEG_PATH)}"
+        elif "This video is available for Premium users only" in error_message:
+            error_message = "This video is only available for YouTube Premium subscribers."
         
         return {
             'success': False,
@@ -419,7 +478,60 @@ def download_video():
 
 @app.route('/', methods=['GET'])
 def home():
-    return jsonify({'status': 'YouTube search and download service is running'})
+    return jsonify({
+        "message": "YouTube Search and Download API",
+        "endpoints": ["/search", "/download", "/download-video", "/debug-env"]
+    })
+
+# Add debug environment endpoint
+@app.route('/debug-env', methods=['GET'])
+def debug_env():
+    import os
+    import sys
+    import json
+    
+    # Collect environment information
+    env_info = {
+        "python_version": sys.version,
+        "platform": sys.platform,
+        "executable": sys.executable,
+        "cwd": os.getcwd(),
+        "env_vars": {k: v for k, v in os.environ.items() if not k.startswith("AWS_") and not k.startswith("VERCEL_")}
+    }
+    
+    # Check for FFmpeg
+    ffmpeg_paths = [
+        "/tmp/ffmpeg",
+        ".vercel/bin/ffmpeg",
+        os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), '.vercel', 'bin', 'ffmpeg'),
+        FFMPEG_PATH
+    ]
+    
+    env_info["ffmpeg_checks"] = {}
+    for path in ffmpeg_paths:
+        env_info["ffmpeg_checks"][path] = {
+            "exists": os.path.exists(path),
+            "executable": os.access(path, os.X_OK) if os.path.exists(path) else False
+        }
+    
+    # Check temp directory
+    temp_dir = "/tmp"
+    env_info["temp_dir"] = {
+        "exists": os.path.exists(temp_dir),
+        "writable": os.access(temp_dir, os.W_OK) if os.path.exists(temp_dir) else False
+    }
+    
+    # Try to create a file in temp
+    test_file = os.path.join(temp_dir, "test.txt")
+    try:
+        with open(test_file, "w") as f:
+            f.write("test")
+        env_info["temp_write_test"] = "success"
+        os.remove(test_file)
+    except Exception as e:
+        env_info["temp_write_test"] = str(e)
+    
+    return jsonify(env_info)
 
 if __name__ == '__main__':
     print("Starting YouTube search and download service...")  # Debug log
